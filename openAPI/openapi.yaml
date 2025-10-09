@@ -1,0 +1,483 @@
+openapi: 3.0.3
+info:
+  title: eDiscovery API
+  description: |
+    eDiscovery API for Instant Messaging - Backend for Frontend (BFF) API.
+    
+    This API provides endpoints for user authentication, WhatsApp device management,
+    chat retrieval, and message viewing for eDiscovery purposes.
+    
+    **Authentication**: Most endpoints require JWT authentication via cookies.
+    Users must first sign up and login to receive an authentication token.
+  version: 1.0.0
+  contact:
+    name: eDiscovery Support
+    url: https://ediscovery.cz
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+  - url: https://ediscovery.cz
+    description: Production server
+
+tags:
+  - name: Authentication
+    description: User authentication endpoints (signup and login)
+  - name: Users
+    description: WhatsApp device/user management
+  - name: Chats
+    description: Chat list retrieval
+  - name: Messages
+    description: Message retrieval from chats
+  - name: QR Code
+    description: WhatsApp QR code generation for device pairing
+
+paths:
+  /api/signup:
+    post:
+      tags:
+        - Authentication
+      summary: User signup
+      description: |
+        Creates a new user account. Currently restricted to username "admin" only.
+        After successful signup, redirects to login page.
+      operationId: signUp
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                  description: Username (must be "admin")
+                  example: admin
+                password:
+                  type: string
+                  format: password
+                  description: User password
+                  example: password123
+      responses:
+        '303':
+          description: Successful signup, redirects to login page
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /login.html
+        '400':
+          description: Bad request - Invalid username or missing password
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Password field is required
+        '405':
+          description: Method not allowed
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Invalid request method
+        '500':
+          description: Internal server error
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Error creating user
+
+  /api/login:
+    post:
+      tags:
+        - Authentication
+      summary: User login
+      description: |
+        Authenticates a user and generates a JWT token stored in an HTTP-only cookie.
+        The token is valid for 24 hours. On success, redirects to the specified URL
+        or to /index.html by default.
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required:
+                - username
+                - password
+              properties:
+                username:
+                  type: string
+                  description: Username
+                  example: admin
+                password:
+                  type: string
+                  format: password
+                  description: User password
+                  example: password123
+                redirectUrl:
+                  type: string
+                  description: Optional URL to redirect after successful login
+                  example: /index.html
+      responses:
+        '303':
+          description: Successful login, redirects to specified or default page
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: auth=<jwt_token>; Path=/; HttpOnly
+            Location:
+              schema:
+                type: string
+                example: /index.html
+        '400':
+          description: Bad request - Missing username or password
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Username and password are required
+        '401':
+          description: Unauthorized - Invalid credentials
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Invalid login credentials
+        '405':
+          description: Method not allowed
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Method not allowed
+
+  /api/users:
+    get:
+      tags:
+        - Users
+      summary: Get all WhatsApp devices
+      description: |
+        Returns a list of all WhatsApp devices/users that have been paired with the system.
+        Each device represents a legal hold (LH) target for eDiscovery purposes.
+      operationId: getUsers
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Successful response with list of devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '303':
+          description: Not authenticated, redirects to login
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /login.html?redirect=/api/users
+        '500':
+          description: Internal server error
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Unable to fetch devices
+
+  /api/{lhid}/chats:
+    get:
+      tags:
+        - Chats
+      summary: Get all chats for a specific WhatsApp device
+      description: |
+        Returns a list of all chats (conversations) for the specified legal hold ID (lhid).
+        The lhid is the JID (Jabber ID) of the WhatsApp device. Each chat includes
+        contact information and phone numbers when available.
+      operationId: getChats
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: lhid
+          in: path
+          required: true
+          description: Legal Hold ID (WhatsApp JID) of the device
+          schema:
+            type: string
+            example: "1234567890@s.whatsapp.net"
+      responses:
+        '200':
+          description: Successful response with chat list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatListResult'
+        '303':
+          description: Not authenticated, redirects to login
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /login.html?redirect=/api/{lhid}/chats
+        '400':
+          description: Bad request - Invalid or missing lhid
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Missing lhid
+        '500':
+          description: Internal server error
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Unable to fetch chats
+
+  /api/{lhid}/chats/{chatid}/messages:
+    get:
+      tags:
+        - Messages
+      summary: Get messages from a specific chat
+      description: |
+        Returns paginated messages from a specific chat. Supports pagination with
+        page and limit query parameters. Messages are returned with sender information,
+        text content, and timestamp.
+      operationId: getMessages
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: lhid
+          in: path
+          required: true
+          description: Legal Hold ID (WhatsApp JID) of the device
+          schema:
+            type: string
+            example: "1234567890@s.whatsapp.net"
+        - name: chatid
+          in: path
+          required: true
+          description: Chat ID (conversation identifier)
+          schema:
+            type: string
+            example: "9876543210@s.whatsapp.net"
+        - name: page
+          in: query
+          required: false
+          description: Page number for pagination (starts at 1)
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+            example: 1
+        - name: limit
+          in: query
+          required: false
+          description: Number of messages per page
+          schema:
+            type: integer
+            minimum: 1
+            default: 10
+            example: 15
+      responses:
+        '200':
+          description: Successful response with paginated messages
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedResponse'
+        '303':
+          description: Not authenticated, redirects to login
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /login.html?redirect=/api/{lhid}/chats/{chatid}/messages
+        '400':
+          description: Bad request - Invalid or missing lhid
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Missing lhid
+        '500':
+          description: Internal server error
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Unable to fetch chat
+
+  /api/code:
+    get:
+      tags:
+        - QR Code
+      summary: Generate WhatsApp QR code for device pairing
+      description: |
+        Generates a WhatsApp QR code that can be scanned to pair a new device for
+        legal hold monitoring. Returns the QR code as ASCII art string. The connection
+        is established asynchronously and the device will be added to the system upon
+        successful pairing.
+      operationId: generateQRCode
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Successful response with QR code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QRCodeResponse'
+        '303':
+          description: Not authenticated, redirects to login
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /login.html?redirect=/api/code
+        '500':
+          description: Internal server error
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Failed to get QR channel
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: auth
+      description: |
+        JWT token stored in HTTP-only cookie. Obtained via /api/login endpoint.
+        Token is valid for 24 hours.
+
+  schemas:
+    User:
+      type: object
+      description: WhatsApp device/user information
+      properties:
+        jid:
+          type: string
+          description: Full Jabber ID (JID) of the WhatsApp device
+          example: "1234567890@s.whatsapp.net"
+        user:
+          type: string
+          description: Phone number part of the JID
+          example: "1234567890"
+        name:
+          type: string
+          description: Push name or display name of the device
+          example: "John Doe"
+        device:
+          type: string
+          description: Device platform
+          example: "android"
+
+    Chat:
+      type: object
+      description: Chat conversation overview
+      properties:
+        chatId:
+          type: string
+          description: Unique identifier for the chat
+          example: "9876543210@s.whatsapp.net"
+        name:
+          type: string
+          description: Contact name or group name
+          example: "Jane Smith"
+        groupName:
+          type: string
+          description: Group name (if applicable)
+          example: "Project Team"
+        participants:
+          type: string
+          description: Comma-separated list of participant phone numbers (for groups)
+          example: "1234567890,9876543210"
+        phoneNo:
+          type: string
+          description: Phone number of the contact (with + prefix)
+          example: "+9876543210"
+
+    ChatListResult:
+      type: object
+      description: Result containing device info and list of chats
+      properties:
+        jid:
+          type: string
+          description: Legal Hold device JID
+          example: "1234567890@s.whatsapp.net"
+        user:
+          type: string
+          description: Phone number of the legal hold device
+          example: "1234567890"
+        name:
+          type: string
+          description: Push name of the legal hold device
+          example: "John Doe"
+        chats:
+          type: array
+          description: List of chats for this device
+          items:
+            $ref: '#/components/schemas/Chat'
+
+    ChatMessage:
+      type: object
+      description: Individual chat message
+      properties:
+        sender:
+          type: string
+          description: Sender name or phone number
+          example: "Jane Smith"
+        text:
+          type: string
+          description: Message text content
+          example: "Hello, how are you?"
+        date:
+          type: string
+          description: Message timestamp
+          example: "2024-01-15 14:30:00"
+
+    PaginatedResponse:
+      type: object
+      description: Paginated list of messages
+      properties:
+        page:
+          type: integer
+          description: Current page number
+          example: 1
+        limit:
+          type: integer
+          description: Number of messages per page
+          example: 15
+        total:
+          type: integer
+          description: Total number of messages in the chat
+          example: 150
+        total_pages:
+          type: integer
+          description: Total number of pages
+          example: 10
+        messages:
+          type: array
+          description: List of messages for the current page
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+
+    QRCodeResponse:
+      type: object
+      description: QR code response for WhatsApp pairing
+      properties:
+        qr_code:
+          type: string
+          description: ASCII art representation of the QR code
+          example: "████ ▄▄▄▄▄ █▀█ █▄▄▀▄█ ▄▄▄▄▄ ████..."
